@@ -31,7 +31,7 @@ def get_vault_client():
     sanctuary_token_path = os.path.join('/var/jenkins_home/workspace/ops-create-sanctuary-token/', file_name)
     if os.path.exists(sanctuary_token_path):
         with open(sanctuary_token_path, 'r') as fp:
-            vault_token = fp.read()
+            vault_token = fp.read().strip()
             token_type = "SANCTUARY"
     else:
         vault_token = os.getenv("GITHUB_TOKEN")

@@ -9,13 +9,15 @@ import boto
 from boto import connect_route53
 from boto.route53.record import ResourceRecordSets
 from pprint import pformat as p
+from pprint import pprint as pp
 import logging
+import atexit
 
 def recompute_proxy_data(nmdproxy, deploy_env):
     """
     The proxy layer is arranged so that when you are trying to
     find the information for a specific application, it is not
-    predictably in the same place. nmdproxy[environment] works, 
+    predictably in the same place. nmdproxy[environment] works,
     but X in nmdproxy[environment][X][apps] is not a predictable
     variable. This function takes the proxy data and reorganizes
     it into something more digestible by ansible Jinja2 templates
@@ -26,11 +28,13 @@ def recompute_proxy_data(nmdproxy, deploy_env):
             continue
         elif env_name == "_redirect":
             for app_name, app in env['apps'].items():
-                proxy[app_name] = app
-                proxy[app_name]['env_name'] = env_name
-                proxy[app_name]['servers'] = '_redirect' if env_name == "_redirect" else top_level_app['servers']
-                proxy[app_name]['dest'] = '' if 'dest' not in app else app['dest']
-                proxy[app_name]['protocol'] = 'https' if 'ssl' in app else 'http'
+                # proxy[app_name] = app
+                # proxy[app_name]['env_name'] = env_name
+                # proxy[app_name]['servers'] = '_redirect' if env_name == "_redirect" else top_level_app['servers']
+                # proxy[app_name]['dest'] = '' if 'dest' not in app else app['dest']
+                # proxy[app_name]['protocol'] = 'https' if 'ssl' in app else 'http'
+                # Skip redirect entries - not as concerned
+                continue
         else:
             for pool_name, top_level_app in env.items():
                 if 'apps' in top_level_app:
@@ -48,7 +52,6 @@ def recompute_proxy_data(nmdproxy, deploy_env):
     return proxy
 
 def get_urls():
-    # TODO - 
     nmdproxy = proxy_lib.get_proxy()
     proxy = recompute_proxy_data(nmdproxy, 'production')
     proxy.update(recompute_proxy_data(nmdproxy, 'staging'))
@@ -68,7 +71,7 @@ def pointed_at_us(url, r, r1):
     except dns.resolver.NoAnswer:
         logging.error("There were no CNAME records found for {host}".format(host=host))
     answer = str(answers[0])
-    if answer in ["hosting.newmediadenver.com.", "hosting.nmdev.us.", "hosting.drud.com."]:
+    if answer in ["hosting.newmediadenver.com.", "hosting.nmdev.us.", "hosting.drud.com.", "hosting-staging.drud.com"]:
         return True
     else:
         logging.error("There was a CNAME record found for {host}, BUT it's is pointing to {answer}!".format(host=host, answer=str(answer)))
@@ -96,7 +99,24 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
             logging.debug(p(r.headers))
             return "wrong dns"
         if r.status_code == 200:
-            success.append(url)
+            # Drupal
+            if 'X-Drupal-Cache' in r.headers.keys():
+                site_type = "drupal"
+            # Wordpress
+            elif ('X-Pingback' in r.headers.keys() and '/wp/' in r.headers['X-Pingback']) or ('Link' in r.headers.keys() and 'api.w.org' in r.headers['Link']):
+                site_type = "wp"
+            else:
+                # Failed to identify, but still a 200
+                site_type = "unknown"
+
+            # Filter into dev and success
+            if ".nmdev.us" in url:
+                dev_success[site_type]['newmedia'].append(url)
+            elif ".drud.io" in url:
+                dev_success[site_type]['drud'].append(url)
+            else:
+                success[site_type].append(url)
+
             #logging.info("Success returned for {url}")
             return "success"
         elif r.status_code == 301:
@@ -106,6 +126,7 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
         elif r.status_code == 401:
             print "The credentials for {url} did not work. A 401 error was recieved. Please fix the credentials for the site.".format(url=url)
             logging.debug(p(r.headers))
+            return "bad creds"
             #sys.exit("Discontinuing run as it could lock out a user account.")
         else:
             error[r.status_code].append(url)
@@ -160,11 +181,64 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
             error["unknown"].append(url)
             return "unknown"
 
+@atexit.register
+def print_summary():
+    print "\n------------------------------------------------------------"
+    print "RECAP:"
+    if len(inconsistencies) > 0:
+        print "\nSites that returned different error codes from the 1st request to the 2nd request:"
+        print "\tURL\tFirst Status\tSecond Status"
+        for url, result in inconsistencies.items():
+            print "\t{url}\t{status}\t{status1}".format(url=url, status=result['status'], status1=result['status1'])
+    if len(error[403]) > 0:
+        print "\n{num} sites with 403 codes (probably deleted but need to be cleaned from the proxy layer)".format(num=len(error[403]))
+        print "\t"+"\n\t".join(error[403])
+    if len(error[500]) > 0:
+        print "\n{num} sites with 500 codes: (probably need repair or deletion)".format(num=len(error[500]))
+        print "\t"+"\n\t".join(error[500])
+    if len(error[502]) > 0:
+        print "\n{num} sites with 502 codes: (probably need repair or deletion)".format(num=len(error[502]))
+        print "\t"+"\n\t".join(error[502])
+    if len(error[503]) > 0:
+        print "\n{num} sites with 503 codes: (probably need repair or deletion)".format(num=len(error[503]))
+        print "\t"+"\n\t".join(error[503])
+    if len(error[504]) > 0:
+        print "\n{num} sites with 504 codes: (probably need repair or deletion)".format(num=len(error[504]))
+        print "\t"+"\n\t".join(error[504])
+    if len(error['offline']) > 0:
+        print "\n{num} offline sites:".format(num=len(error['offline']))
+        print "\t"+"\n\t".join(error['offline'])
+    if len(error['cert']) > 0:
+        print "\n{num} sites with certificate errors:".format(num=len(error['cert']))
+        print "\t"+"\n\t".join(error['cert'])
+    if len(error['wrong_dns']) > 0:
+        print "\n{num} sites with bad DNS errors: (These sites don't appear to be pointed at us correctly)".format(num=len(error['wrong_dns']))
+        print "\t"+"\n\t".join(error['wrong_dns'])
+    if len(error['unknown']) > 0:
+        print "\n{num} sites with unknown errors:".format(num=len(error['unknown']))
+        print "\t"+"\n\t".join(error['unknown'])
+    if len(dev_success) > 0:
+        # Sort out the dev sites
+        for site_type, dev_orgs in dev_success.items():
+            for dev_org, urls in dev_orgs.items():
+                if len(urls) > 0:
+                    print "\n{num} {org} {stype} development sites that are live:".format(num=len(urls), org=dev_org, stype=site_type)
+                    print "\t"+"\n\t".join(sorted(urls))
+
+    if len(success) > 0:
+        print "\n\n------------------------------------------------------------"
+        for site_type, urls in success.items():
+            if len(urls) > 0:
+                print "\n{num} {stype} production sites that are live:".format(num=len(urls), stype=site_type)
+                print "\t"+"\n\t".join(sorted(urls))
+
+
 if __name__ == '__main__':
     logging.basicConfig(filename='trace.log',level=logging.DEBUG)
     user=os.environ.get("GUEST_USER")
     password=os.environ.get("GUEST_PASSWORD")
-    success = []
+    success = {'drupal': [], 'wp': [], 'unknown': []}
+    dev_success = {'drupal': {'newmedia': [], 'drud': []}, 'wp': {'newmedia': [], 'drud': []}, 'unknown': {'newmedia': [], 'drud': []}}
     redirect = []
     error = {403 : [], 500: [], 502: [], 503: [], 504: [], 'cert': [], 'offline': [], 'wrong_dns': [], 'unknown': []}
     inconsistencies = {}
@@ -173,7 +247,7 @@ if __name__ == '__main__':
     count = 1
     for i, (url, total) in enumerate(get_urls()):
         # Bypass known problem URLS
-        if url in ['https://leroy.nmdev.us', 'http://api.newmediadenver.com']:
+        if url in ['https://leroy.nmdev.us', 'http://api.newmediadenver.com', 'https://leroy.drud.com']:
             logging.debug("Bypassing check on known issue on {url}".format(url=url))
             continue
         message = ""
@@ -184,47 +258,9 @@ if __name__ == '__main__':
         ret_status = diagnose_url(url, success, redirect, error, inconsistencies, authentication)
         print "{perc:06.2f}%{count:>5}/{total:<5}{url:<44}{status:<15}".format(perc=(float(i)/float(total))*100,count=i,total=total,url=url,status=ret_status)
 
-    print "\n------------------------------------------------------------"
-    print "RECAP:"
-    if len(inconsistencies) > 0:
-        print "\nSites that returned different error codes from the 1st request to the 2nd request:"
-        print "\tURL\tFirst Status\tSecond Status"
-        for url, result in inconsistencies.items():
-            print "\t{url}\t{status}\t{status1}".format(url=url, status=result['status'], status1=result['status1'])
-    if len(error[403]) > 0:
-        print "\nSites with 403 codes (probably deleted but need to be cleaned from the proxy layer)"
-        print "\t"+"\n\t".join(error[403])
-    if len(error[500]) > 0:
-        print "\nSites with 500 codes: (probably need repair or deletion)"
-        print "\t"+"\n\t".join(error[500])
-    if len(error[502]) > 0:
-        print "\nSites with 502 codes: (probably need repair or deletion)"
-        print "\t"+"\n\t".join(error[502])
-    if len(error[503]) > 0:
-        print "\nSites with 503 codes: (probably need repair or deletion)"
-        print "\t"+"\n\t".join(error[503])
-    if len(error[504]) > 0:
-        print "\nSites with 504 codes: (probably need repair or deletion)"
-        print "\t"+"\n\t".join(error[504])
-    if len(error['offline']) > 0:
-        print "\nOffline sites:"
-        print "\t"+"\n\t".join(error['offline'])
-    if len(error['cert']) > 0:
-        print "\nSites with certificate errors:"
-        print "\t"+"\n\t".join(error['cert'])
-    if len(error['wrong_dns']) > 0:
-        print "\nSites with bad DNS errors: (These sites don't appear to be pointed at us correctly)"
-        print "\t"+"\n\t".join(error['wrong_dns'])
-    if len(error['unknown']) > 0:
-        print "\nSites with unknown errors:"
-        print "\t"+"\n\t".join(error['unknown'])
-    if len(success) > 0:
-        print "\n\n------------------------------------------------------------"
-        print "And of course, all the sites that are fine:"
-        print "\t"+"\n\t".join(success)
 
-    build_url=os.environ.get('BUILD_URL',os.path.join(os.getcwd(), 'trace.log'))
-    print "\nA full trace including headers and errors can be found at {build_url}".format(build_url=build_url)
+    #build_url=os.environ.get('BUILD_URL',os.path.join(os.getcwd(), 'trace.log'))
+    #print "\nA full trace including headers and errors can be found at {build_url}".format(build_url=build_url)
 
 
 
