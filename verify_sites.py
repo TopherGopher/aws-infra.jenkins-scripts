@@ -159,7 +159,7 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
             if r3.status_code == 200:
                 logging.error("The URL {url} could not be reached by https, but was OK when trying with HTTP.".format(url=url))
                 logging.debug(p(repr(e)))
-                inconsistencies[url] = {'status': r.status_code, 'status1': r3.status_code}
+                inconsistencies[url] = {'status': 'https_fail', 'status1': r3.status_code}
                 return "inconsistent"
             else:
                 error['unknown'].append(url)
