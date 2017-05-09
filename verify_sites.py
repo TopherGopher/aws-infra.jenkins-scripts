@@ -13,6 +13,8 @@ from pprint import pprint as pp
 import logging
 import atexit
 
+report_printed = False
+
 def recompute_proxy_data(nmdproxy, deploy_env):
     """
     The proxy layer is arranged so that when you are trying to
@@ -155,7 +157,7 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
             # If the connection was refused, try again with http
             r3 = requests.get(url.replace("https://", "http://"), auth=(user, password))
             if r3.status_code == 200:
-                logging.error("The URL {url} could not be reached by https, but was OK when trying with HTTP.".format(url))
+                logging.error("The URL {url} could not be reached by https, but was OK when trying with HTTP.".format(url=url))
                 logging.debug(p(repr(e)))
                 inconsistencies[url] = {'status': r.status_code, 'status1': r3.status_code}
                 return "inconsistent"
@@ -183,6 +185,8 @@ def diagnose_url(url, success, redirect, error, inconsistencies, authentication)
 
 @atexit.register
 def print_summary():
+    if report_printed:
+        return True
     print "\n------------------------------------------------------------"
     print "RECAP:"
     if len(inconsistencies) > 0:
@@ -257,6 +261,9 @@ if __name__ == '__main__':
         #   break
         ret_status = diagnose_url(url, success, redirect, error, inconsistencies, authentication)
         print "{perc:06.2f}%{count:>5}/{total:<5}{url:<44}{status:<15}".format(perc=(float(i)/float(total))*100,count=i,total=total,url=url,status=ret_status)
+
+    print_summary()
+    report_printed=True
 
 
     #build_url=os.environ.get('BUILD_URL',os.path.join(os.getcwd(), 'trace.log'))
