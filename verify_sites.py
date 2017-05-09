@@ -27,14 +27,14 @@ def recompute_proxy_data(nmdproxy, deploy_env):
         if env_name == "id":
             continue
         elif env_name == "_redirect":
-            for app_name, app in env['apps'].items():
+            continue
+            #for app_name, app in env['apps'].items():
                 # proxy[app_name] = app
                 # proxy[app_name]['env_name'] = env_name
                 # proxy[app_name]['servers'] = '_redirect' if env_name == "_redirect" else top_level_app['servers']
                 # proxy[app_name]['dest'] = '' if 'dest' not in app else app['dest']
                 # proxy[app_name]['protocol'] = 'https' if 'ssl' in app else 'http'
                 # Skip redirect entries - not as concerned
-                continue
         else:
             for pool_name, top_level_app in env.items():
                 if 'apps' in top_level_app:
