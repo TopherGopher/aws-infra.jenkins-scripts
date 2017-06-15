@@ -43,6 +43,8 @@ def recompute_proxy_data(nmdproxy, deploy_env):
                     apps = top_level_app['apps']
                     for app_name, app in apps.items():
                         if env_name == deploy_env:
+                            if app_name.endswith('.nmdev.us'):
+                                continue
                             proxy[app_name] = app
                             proxy[app_name]['pool_name'] = pool_name
                             proxy[app_name]['env_name'] = env_name
