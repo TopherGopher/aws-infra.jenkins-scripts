@@ -73,7 +73,13 @@ def pointed_at_us(url, r, r1):
     except dns.resolver.NoAnswer:
         logging.error("There were no CNAME records found for {host}".format(host=host))
     answer = str(answers[0])
-    if answer in ["hosting.newmediadenver.com.", "hosting.nmdev.us.", "hosting.drud.com.", "hosting-staging.drud.com"]:
+    if answer in ["hosting.newmediadenver.com."]:
+        dns_location["hosting.newmediadenver.com"].append(host)
+        return True
+    elif answer in ["hosting.drud.com."]:
+        dns_location["hosting.drud.com"].append(host)
+        return True
+    elif answer in ["hosting-staging.drud.com.", "hosting.nmdev.us."]:
         return True
     else:
         logging.error("There was a CNAME record found for {host}, BUT it's is pointing to {answer}!".format(host=host, answer=str(answer)))
@@ -236,8 +242,16 @@ def print_summary():
                 print "\n{num} {stype} production sites that are live:".format(num=len(urls), stype=site_type)
                 print "\t"+"\n\t".join(sorted(urls))
 
+    if len(dns_location) > 0:
+        print "\n\n------------------------------------------------------------"
+        for location, urls in dns_location.items():
+            if len(urls) > 0:
+                print "\n{num} sites that are pointed at {location}:".format(num=len(urls), location=location)
+                print "\t"+"\n\t".join(sorted(urls))
+
 
 if __name__ == '__main__':
+    dns_location = {"hosting.newmediadenver.com":[], "hosting.drud.com":[]}
     logging.basicConfig(filename='trace.log',level=logging.DEBUG)
     user=os.environ.get("GUEST_USER")
     password=os.environ.get("GUEST_PASSWORD")
